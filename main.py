@@ -399,10 +399,12 @@ def train(args, net, train_loader, test_loader, textio):
             best_test_t_rmse_ba = test_t_rmse_ba
             best_test_t_mae_ba = test_t_mae_ba
 
+            filename = 'checkpoints/%s/models/model.best.t7' % args.exp_name
             if torch.cuda.device_count() > 1:
-                torch.save(net.module.state_dict(), 'checkpoints/%s/models/model.best.t7' % args.exp_name)
+                torch.save(net.module.state_dict(), filename)
             else:
-                torch.save(net.state_dict(), 'checkpoints/%s/models/model.best.t7' % args.exp_name)
+                torch.save(net.state_dict(), filename)
+            wandb.save(filename)
 
         textio.cprint('==TRAIN==')
         textio.cprint('A--------->B')
