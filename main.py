@@ -47,9 +47,13 @@ def _init_(args):
     os.system('cp model.py checkpoints' + '/' + args.exp_name + '/' + 'model.py.backup')
     os.system('cp data.py checkpoints' + '/' + args.exp_name + '/' + 'data.py.backup')
 
-    key, project, name = json.load(open(args.wandb_path, "r"))
-    wandb.login(key=key)
-    run = wandb.init(name=name, reinit=True, project=project, config=vars(args))
+    if args.eval:
+        run = None
+    else:
+        key, project, name = json.load(open(args.wandb_path, "r"))
+        wandb.login(key=key)
+        run = wandb.init(name=name, reinit=True, project=project, config=vars(args))
+
     return run
 
 
@@ -627,7 +631,8 @@ def main():
         train(args, net, train_loader, test_loader, textio)
 
     print('FINISH')
-    run.finish()
+    if run is not None:
+        run.finish()
 
 
 if __name__ == '__main__':
