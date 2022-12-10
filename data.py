@@ -3,8 +3,9 @@
 
 
 import os
-import sys
 import glob
+from typing import Tuple, Any, Optional
+
 import h5py
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -58,13 +59,153 @@ def jitter_pointcloud(pointcloud, sigma=0.01, clip=0.05):
     return pointcloud
 
 
+class Jitter:
+    def __init__(self, sigma=0.01, clip=0.05):
+        self._sigma = sigma
+        self._clip = clip
+
+    def __call__(self, pointcloud):
+        return jitter_pointcloud(pointcloud, self._sigma, self._clip)
+
+
+class RandomRemove:
+    """
+    Remove pointcloud randomly with an arbitrary probability.
+    """
+    def __init__(self, prob=0.2):
+        self._prob = prob
+
+    def __call__(self, pointcloud):
+        original_length = pointcloud.shape[0]
+        random_uniform = np.random.uniform(0, 1, pointcloud.shape[0])
+        masked_in = random_uniform > 0.2
+
+        masked_pointcloud = pointcloud[masked_in, :]
+
+        if len(masked_pointcloud) == 0:
+            return pointcloud
+
+        while masked_pointcloud.shape[0] < original_length:
+            masked_pointcloud = np.concatenate([masked_pointcloud, masked_pointcloud], axis=0)
+
+        masked_pointcloud = masked_pointcloud[:original_length, :]
+        return masked_pointcloud
+
+
+class RandomRemoveFourQuadrant:
+    def __call__(self, pointcloud):
+
+        original_length = pointcloud.shape[0]
+        along_which_axis = np.random.randint(3)
+
+        boolean_arr_masked_out = np.ones(original_length)
+        for i in range(3):
+            if i == along_which_axis:
+                continue
+            is_larger = np.random.randint(2)
+            boolean_arr_axis = pointcloud[:, i] > 0 if is_larger else pointcloud[:, i] < 0
+            boolean_arr_masked_out = np.logical_and(boolean_arr_axis, boolean_arr_masked_out)
+
+        masked_pointcloud = pointcloud[np.logical_not(boolean_arr_masked_out), :]
+
+        if len(masked_pointcloud) == 0:
+            return pointcloud
+
+        while masked_pointcloud.shape[0] < original_length:
+            masked_pointcloud = np.concatenate([masked_pointcloud, masked_pointcloud], axis=0)
+
+        masked_pointcloud = masked_pointcloud[:original_length, :]
+        return masked_pointcloud
+
+
+class RandomRemoveTwoQuadrant:
+    def __call__(self, pointcloud):
+        original_length = pointcloud.shape[0]
+        along_which_axis = np.random.randint(3)
+
+        is_larger = np.random.randint(2)
+        boolean_mask = pointcloud[:, along_which_axis] > 0 if is_larger else pointcloud[:, along_which_axis] < 0
+
+        masked_pointcloud = pointcloud[boolean_mask, :]
+
+        if len(masked_pointcloud) == 0:
+            return pointcloud
+
+        while masked_pointcloud.shape[0] < original_length:
+            masked_pointcloud = np.concatenate([masked_pointcloud, masked_pointcloud], axis=0)
+
+        masked_pointcloud = masked_pointcloud[:original_length, :]
+        return masked_pointcloud
+
+
+class RandomRemoveEightQuadrant:
+    """
+    Remove an eighth of the pointcloud that belongs to a quadrant
+    """
+    def __call__(self, pointcloud):
+        original_length = pointcloud.shape[0]
+
+        larger_x = np.random.randint(2)
+        larger_y = np.random.randint(2)
+        larger_z = np.random.randint(2)
+
+        boolean_arr_x = pointcloud[:, 0] > 0 if larger_x else pointcloud[:, 0] < 0
+        boolean_arr_y = pointcloud[:, 1] > 0 if larger_y else pointcloud[:, 1] < 0
+        boolean_arr_z = pointcloud[:, 2] > 0 if larger_z else pointcloud[:, 2] < 0
+
+        masked_out = np.logical_and(boolean_arr_x, boolean_arr_y)
+        masked_out = np.logical_and(masked_out, boolean_arr_z)
+
+        masked_pointcloud = pointcloud[np.logical_not(masked_out), :]
+
+        if len(masked_pointcloud) == 0:
+            return pointcloud
+
+        while masked_pointcloud.shape[0] < original_length:
+            masked_pointcloud = np.concatenate([masked_pointcloud, masked_pointcloud], axis=0)
+
+        masked_pointcloud = masked_pointcloud[:original_length, :]
+
+        return masked_pointcloud
+
+
+class Augment:
+    def __init__(
+            self,
+            transforms: Tuple[Any] = (
+                # Jitter(),  # TODO: ALWAYS LEAVE THIS LINE UNCOMMENTED
+                RandomRemoveTwoQuadrant(),  # TODO: Sergi: Uncomment this line and comment out the rest, run python command
+                # RandomRemoveFourQuadrant(),  # TODO: Eric: Uncomment this line, and comment out the rest and run the python command.
+                # RandomRemoveEightQuadrant(),  # TODO: Siddhant: Uncomment this line and comment out the rest and run the python command.
+                # RandomRemove()  # TODO: Arvind: Uncomment this line and comment out the rest and run the python command.
+            )
+         ):
+        self._transforms = transforms
+    def __call__(self, pointcloud):
+        for transform in self._transforms:
+            pointcloud = transform(pointcloud)
+
+        return pointcloud
+
+
 class ModelNet40(Dataset):
-    def __init__(self, num_points, partition='train', gaussian_noise=False, unseen=False, factor=4):
+    def __init__(self,
+                 num_points,
+                 partition='train',
+                 gaussian_noise=False,
+                 unseen=False,
+                 augment: Optional[Augment] = Augment(),
+                 is_augment_a: bool = True,  # We are only augmenting the source point cloud throughout the experiments.
+                 is_augment_b: bool = False,
+                 factor=4):
         self.data, self.label = load_data(partition)
         self.num_points = num_points
         self.partition = partition
         self.gaussian_noise = gaussian_noise
         self.unseen = unseen
+        self.augment = augment
+        self.is_augment_a = is_augment_a
+        self.is_augment_b = is_augment_b
         self.label = self.label.squeeze()
         self.factor = factor
         if self.unseen:
@@ -107,10 +248,24 @@ class ModelNet40(Dataset):
                                    np.random.uniform(-0.5, 0.5)])
         translation_ba = -R_ba.dot(translation_ab)
 
-        pointcloud1 = pointcloud.T
+        pointcloud1 = pointcloud
+        if self.is_augment_a:
+            if self.augment:
+                pointcloud1 = self.augment(pointcloud)
+            else:
+                pointcloud1 = pointcloud
+        pointcloud1 = pointcloud1.T
+
+        pointcloud2 = pointcloud
+        if self.is_augment_b:
+            if self.augment:
+                pointcloud2 = self.augment(pointcloud)
+            else:
+                pointcloud2 = pointcloud
+        pointcloud2 = pointcloud2.T
 
         rotation_ab = Rotation.from_euler('zyx', [anglez, angley, anglex])
-        pointcloud2 = rotation_ab.apply(pointcloud1.T).T + np.expand_dims(translation_ab, axis=1)
+        pointcloud2 = rotation_ab.apply(pointcloud2.T).T + np.expand_dims(translation_ab, axis=1)
 
         euler_ab = np.asarray([anglez, angley, anglex])
         euler_ba = -euler_ab[::-1]

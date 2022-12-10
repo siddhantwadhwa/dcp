@@ -6,6 +6,7 @@ from __future__ import print_function
 import os
 import gc
 import argparse
+import json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,8 +17,8 @@ from model import DCP
 from util import transform_point_cloud, npmat2euler
 import numpy as np
 from torch.utils.data import DataLoader
-from tensorboardX import SummaryWriter
 from tqdm import tqdm
+import wandb
 
 
 # Part of the code is referred from: https://github.com/floodsung/LearningToCompare_FSL
@@ -45,6 +46,15 @@ def _init_(args):
     os.system('cp main.py checkpoints' + '/' + args.exp_name + '/' + 'main.py.backup')
     os.system('cp model.py checkpoints' + '/' + args.exp_name + '/' + 'model.py.backup')
     os.system('cp data.py checkpoints' + '/' + args.exp_name + '/' + 'data.py.backup')
+
+    if args.eval:
+        run = None
+    else:
+        key, project, name = json.load(open(args.wandb_path, "r"))
+        wandb.login(key=key)
+        run = wandb.init(name=name, reinit=True, project=project, config=vars(args))
+
+    return run
 
 
 def test_one_epoch(args, net, test_loader):
@@ -242,7 +252,7 @@ def train_one_epoch(args, net, train_loader, opt):
            translations_ba, rotations_ba_pred, translations_ba_pred, eulers_ab, eulers_ba
 
 
-def test(args, net, test_loader, boardio, textio):
+def test(args, net, test_loader, textio):
 
     test_loss, test_cycle_loss, \
     test_mse_ab, test_mae_ab, test_mse_ba, test_mae_ba, test_rotations_ab, test_translations_ab, \
@@ -282,7 +292,7 @@ def test(args, net, test_loader, boardio, textio):
                      test_r_mae_ba, test_t_mse_ba, test_t_rmse_ba, test_t_mae_ba))
 
 
-def train(args, net, train_loader, test_loader, boardio, textio):
+def train(args, net, train_loader, test_loader, textio):
     if args.use_sgd:
         print("Use SGD")
         opt = optim.SGD(net.parameters(), lr=args.lr * 100, momentum=args.momentum, weight_decay=1e-4)
@@ -290,7 +300,6 @@ def train(args, net, train_loader, test_loader, boardio, textio):
         print("Use Adam")
         opt = optim.Adam(net.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = MultiStepLR(opt, milestones=[75, 150, 200], gamma=0.1)
-
 
     best_test_loss = np.inf
     best_test_cycle_loss = np.inf
@@ -394,10 +403,12 @@ def train(args, net, train_loader, test_loader, boardio, textio):
             best_test_t_rmse_ba = test_t_rmse_ba
             best_test_t_mae_ba = test_t_mae_ba
 
+            filename = 'checkpoints/%s/models/model.best.t7' % args.exp_name
             if torch.cuda.device_count() > 1:
-                torch.save(net.module.state_dict(), 'checkpoints/%s/models/model.best.t7' % args.exp_name)
+                torch.save(net.module.state_dict(), filename)
             else:
-                torch.save(net.state_dict(), 'checkpoints/%s/models/model.best.t7' % args.exp_name)
+                torch.save(net.state_dict(), filename)
+            wandb.save(filename)
 
         textio.cprint('==TRAIN==')
         textio.cprint('A--------->B')
@@ -437,78 +448,79 @@ def train(args, net, train_loader, test_loader, boardio, textio):
                          best_test_r_mse_ba, best_test_r_rmse_ba,
                          best_test_r_mae_ba, best_test_t_mse_ba, best_test_t_rmse_ba, best_test_t_mae_ba))
 
-        boardio.add_scalar('A->B/train/loss', train_loss, epoch)
-        boardio.add_scalar('A->B/train/MSE', train_mse_ab, epoch)
-        boardio.add_scalar('A->B/train/RMSE', train_rmse_ab, epoch)
-        boardio.add_scalar('A->B/train/MAE', train_mae_ab, epoch)
-        boardio.add_scalar('A->B/train/rotation/MSE', train_r_mse_ab, epoch)
-        boardio.add_scalar('A->B/train/rotation/RMSE', train_r_rmse_ab, epoch)
-        boardio.add_scalar('A->B/train/rotation/MAE', train_r_mae_ab, epoch)
-        boardio.add_scalar('A->B/train/translation/MSE', train_t_mse_ab, epoch)
-        boardio.add_scalar('A->B/train/translation/RMSE', train_t_rmse_ab, epoch)
-        boardio.add_scalar('A->B/train/translation/MAE', train_t_mae_ab, epoch)
+        wandb.log({'lr': scheduler.get_last_lr()[0]})
+        wandb.log({'A->B/train/loss': train_loss})
+        wandb.log({'A->B/train/MSE': train_mse_ab})
+        wandb.log({'A->B/train/RMSE': train_rmse_ab})
+        wandb.log({'A->B/train/MAE': train_mae_ab})
+        wandb.log({'A->B/train/rotation/MSE': train_r_mse_ab})
+        wandb.log({'A->B/train/rotation/RMSE': train_r_rmse_ab})
+        wandb.log({'A->B/train/rotation/MAE': train_r_mae_ab})
+        wandb.log({'A->B/train/translation/MSE': train_t_mse_ab})
+        wandb.log({'A->B/train/translation/RMSE': train_t_rmse_ab})
+        wandb.log({'A->B/train/translation/MAE': train_t_mae_ab})
 
-        boardio.add_scalar('B->A/train/loss', train_loss, epoch)
-        boardio.add_scalar('B->A/train/MSE', train_mse_ba, epoch)
-        boardio.add_scalar('B->A/train/RMSE', train_rmse_ba, epoch)
-        boardio.add_scalar('B->A/train/MAE', train_mae_ba, epoch)
-        boardio.add_scalar('B->A/train/rotation/MSE', train_r_mse_ba, epoch)
-        boardio.add_scalar('B->A/train/rotation/RMSE', train_r_rmse_ba, epoch)
-        boardio.add_scalar('B->A/train/rotation/MAE', train_r_mae_ba, epoch)
-        boardio.add_scalar('B->A/train/translation/MSE', train_t_mse_ba, epoch)
-        boardio.add_scalar('B->A/train/translation/RMSE', train_t_rmse_ba, epoch)
-        boardio.add_scalar('B->A/train/translation/MAE', train_t_mae_ba, epoch)
+        wandb.log({'B->A/train/loss': train_loss})
+        wandb.log({'B->A/train/MSE': train_mse_ba})
+        wandb.log({'B->A/train/RMSE': train_rmse_ba})
+        wandb.log({'B->A/train/MAE': train_mae_ba})
+        wandb.log({'B->A/train/rotation/MSE': train_r_mse_ba})
+        wandb.log({'B->A/train/rotation/RMSE': train_r_rmse_ba})
+        wandb.log({'B->A/train/rotation/MAE': train_r_mae_ba})
+        wandb.log({'B->A/train/translation/MSE': train_t_mse_ba})
+        wandb.log({'B->A/train/translation/RMSE': train_t_rmse_ba})
+        wandb.log({'B->A/train/translation/MAE': train_t_mae_ba})
 
         ############TEST
-        boardio.add_scalar('A->B/test/loss', test_loss, epoch)
-        boardio.add_scalar('A->B/test/MSE', test_mse_ab, epoch)
-        boardio.add_scalar('A->B/test/RMSE', test_rmse_ab, epoch)
-        boardio.add_scalar('A->B/test/MAE', test_mae_ab, epoch)
-        boardio.add_scalar('A->B/test/rotation/MSE', test_r_mse_ab, epoch)
-        boardio.add_scalar('A->B/test/rotation/RMSE', test_r_rmse_ab, epoch)
-        boardio.add_scalar('A->B/test/rotation/MAE', test_r_mae_ab, epoch)
-        boardio.add_scalar('A->B/test/translation/MSE', test_t_mse_ab, epoch)
-        boardio.add_scalar('A->B/test/translation/RMSE', test_t_rmse_ab, epoch)
-        boardio.add_scalar('A->B/test/translation/MAE', test_t_mae_ab, epoch)
+        wandb.log({'A->B/test/loss': test_loss})
+        wandb.log({'A->B/test/MSE': test_mse_ab})
+        wandb.log({'A->B/test/RMSE': test_rmse_ab})
+        wandb.log({'A->B/test/MAE': test_mae_ab})
+        wandb.log({'A->B/test/rotation/MSE': test_r_mse_ab})
+        wandb.log({'A->B/test/rotation/RMSE': test_r_rmse_ab})
+        wandb.log({'A->B/test/rotation/MAE': test_r_mae_ab})
+        wandb.log({'A->B/test/translation/MSE': test_t_mse_ab})
+        wandb.log({'A->B/test/translation/RMSE': test_t_rmse_ab})
+        wandb.log({'A->B/test/translation/MAE': test_t_mae_ab})
 
-        boardio.add_scalar('B->A/test/loss', test_loss, epoch)
-        boardio.add_scalar('B->A/test/MSE', test_mse_ba, epoch)
-        boardio.add_scalar('B->A/test/RMSE', test_rmse_ba, epoch)
-        boardio.add_scalar('B->A/test/MAE', test_mae_ba, epoch)
-        boardio.add_scalar('B->A/test/rotation/MSE', test_r_mse_ba, epoch)
-        boardio.add_scalar('B->A/test/rotation/RMSE', test_r_rmse_ba, epoch)
-        boardio.add_scalar('B->A/test/rotation/MAE', test_r_mae_ba, epoch)
-        boardio.add_scalar('B->A/test/translation/MSE', test_t_mse_ba, epoch)
-        boardio.add_scalar('B->A/test/translation/RMSE', test_t_rmse_ba, epoch)
-        boardio.add_scalar('B->A/test/translation/MAE', test_t_mae_ba, epoch)
+        wandb.log({'B->A/test/loss': test_loss})
+        wandb.log({'B->A/test/MSE': test_mse_ba})
+        wandb.log({'B->A/test/RMSE': test_rmse_ba})
+        wandb.log({'B->A/test/MAE': test_mae_ba})
+        wandb.log({'B->A/test/rotation/MSE': test_r_mse_ba})
+        wandb.log({'B->A/test/rotation/RMSE': test_r_rmse_ba})
+        wandb.log({'B->A/test/rotation/MAE': test_r_mae_ba})
+        wandb.log({'B->A/test/translation/MSE': test_t_mse_ba})
+        wandb.log({'B->A/test/translation/RMSE': test_t_rmse_ba})
+        wandb.log({'B->A/test/translation/MAE': test_t_mae_ba})
 
         ############BEST TEST
-        boardio.add_scalar('A->B/best_test/loss', best_test_loss, epoch)
-        boardio.add_scalar('A->B/best_test/MSE', best_test_mse_ab, epoch)
-        boardio.add_scalar('A->B/best_test/RMSE', best_test_rmse_ab, epoch)
-        boardio.add_scalar('A->B/best_test/MAE', best_test_mae_ab, epoch)
-        boardio.add_scalar('A->B/best_test/rotation/MSE', best_test_r_mse_ab, epoch)
-        boardio.add_scalar('A->B/best_test/rotation/RMSE', best_test_r_rmse_ab, epoch)
-        boardio.add_scalar('A->B/best_test/rotation/MAE', best_test_r_mae_ab, epoch)
-        boardio.add_scalar('A->B/best_test/translation/MSE', best_test_t_mse_ab, epoch)
-        boardio.add_scalar('A->B/best_test/translation/RMSE', best_test_t_rmse_ab, epoch)
-        boardio.add_scalar('A->B/best_test/translation/MAE', best_test_t_mae_ab, epoch)
+        wandb.log({'A->B/best_test/loss': best_test_loss})
+        wandb.log({'A->B/best_test/MSE': best_test_mse_ab})
+        wandb.log({'A->B/best_test/RMSE': best_test_rmse_ab})
+        wandb.log({'A->B/best_test/MAE': best_test_mae_ab})
+        wandb.log({'A->B/best_test/rotation/MSE': best_test_r_mse_ab})
+        wandb.log({'A->B/best_test/rotation/RMSE': best_test_r_rmse_ab})
+        wandb.log({'A->B/best_test/rotation/MAE': best_test_r_mae_ab})
+        wandb.log({'A->B/best_test/translation/MSE': best_test_t_mse_ab})
+        wandb.log({'A->B/best_test/translation/RMSE': best_test_t_rmse_ab})
+        wandb.log({'A->B/best_test/translation/MAE': best_test_t_mae_ab})
 
-        boardio.add_scalar('B->A/best_test/loss', best_test_loss, epoch)
-        boardio.add_scalar('B->A/best_test/MSE', best_test_mse_ba, epoch)
-        boardio.add_scalar('B->A/best_test/RMSE', best_test_rmse_ba, epoch)
-        boardio.add_scalar('B->A/best_test/MAE', best_test_mae_ba, epoch)
-        boardio.add_scalar('B->A/best_test/rotation/MSE', best_test_r_mse_ba, epoch)
-        boardio.add_scalar('B->A/best_test/rotation/RMSE', best_test_r_rmse_ba, epoch)
-        boardio.add_scalar('B->A/best_test/rotation/MAE', best_test_r_mae_ba, epoch)
-        boardio.add_scalar('B->A/best_test/translation/MSE', best_test_t_mse_ba, epoch)
-        boardio.add_scalar('B->A/best_test/translation/RMSE', best_test_t_rmse_ba, epoch)
-        boardio.add_scalar('B->A/best_test/translation/MAE', best_test_t_mae_ba, epoch)
+        wandb.log({'B->A/best_test/loss': best_test_loss})
+        wandb.log({'B->A/best_test/MSE': best_test_mse_ba})
+        wandb.log({'B->A/best_test/RMSE': best_test_rmse_ba})
+        wandb.log({'B->A/best_test/MAE': best_test_mae_ba})
+        wandb.log({'B->A/best_test/rotation/MSE': best_test_r_mse_ba})
+        wandb.log({'B->A/best_test/rotation/RMSE': best_test_r_rmse_ba})
+        wandb.log({'B->A/best_test/rotation/MAE': best_test_r_mae_ba})
+        wandb.log({'B->A/best_test/translation/MSE': best_test_t_mse_ba})
+        wandb.log({'B->A/best_test/translation/RMSE': best_test_t_rmse_ba})
+        wandb.log({'B->A/best_test/translation/MAE': best_test_t_mae_ba})
 
-        if torch.cuda.device_count() > 1:
-            torch.save(net.module.state_dict(), 'checkpoints/%s/models/model.%d.t7' % (args.exp_name, epoch))
-        else:
-            torch.save(net.state_dict(), 'checkpoints/%s/models/model.%d.t7' % (args.exp_name, epoch))
+        # if torch.cuda.device_count() > 1:
+        #     torch.save(net.module.state_dict(), 'checkpoints/%s/models/model.%d.t7' % (args.exp_name, epoch))
+        # else:
+        #     torch.save(net.state_dict(), 'checkpoints/%s/models/model.%d.t7' % (args.exp_name, epoch))
         gc.collect()
 
 
@@ -542,7 +554,7 @@ def main():
                         help='Size of batch)')
     parser.add_argument('--test_batch_size', type=int, default=10, metavar='batch_size',
                         help='Size of batch)')
-    parser.add_argument('--epochs', type=int, default=250, metavar='N',
+    parser.add_argument('--epochs', type=int, default=100, metavar='N',
                         help='number of episode to train ')
     parser.add_argument('--use_sgd', action='store_true', default=False,
                         help='Use SGD')
@@ -570,6 +582,8 @@ def main():
                         help='Divided factor for rotations')
     parser.add_argument('--model_path', type=str, default='', metavar='N',
                         help='Pretrained model path')
+    parser.add_argument('--wandb_path', type=str, default='',
+                        help='Path to json file with (key, project, name) for wandb in it')
 
     args = parser.parse_args()
     torch.backends.cudnn.deterministic = True
@@ -577,8 +591,7 @@ def main():
     torch.cuda.manual_seed_all(args.seed)
     np.random.seed(args.seed)
 
-    boardio = SummaryWriter(log_dir='checkpoints/' + args.exp_name)
-    _init_(args)
+    run = _init_(args)
 
     textio = IOStream('checkpoints/' + args.exp_name + '/run.log')
     textio.cprint(str(args))
@@ -598,7 +611,7 @@ def main():
     if args.model == 'dcp':
         net = DCP(args).cuda()
         if args.eval:
-            if args.model_path is '':
+            if args.model_path == '':
                 model_path = 'checkpoints' + '/' + args.exp_name + '/models/model.best.t7'
             else:
                 model_path = args.model_path
@@ -613,13 +626,13 @@ def main():
     else:
         raise Exception('Not implemented')
     if args.eval:
-        test(args, net, test_loader, boardio, textio)
+        test(args, net, test_loader, textio)
     else:
-        train(args, net, train_loader, test_loader, boardio, textio)
-
+        train(args, net, train_loader, test_loader, textio)
 
     print('FINISH')
-    boardio.close()
+    if run is not None:
+        run.finish()
 
 
 if __name__ == '__main__':
