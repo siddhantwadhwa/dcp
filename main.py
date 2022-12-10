@@ -517,10 +517,10 @@ def train(args, net, train_loader, test_loader, textio):
         wandb.log({'B->A/best_test/translation/RMSE': best_test_t_rmse_ba})
         wandb.log({'B->A/best_test/translation/MAE': best_test_t_mae_ba})
 
-        if torch.cuda.device_count() > 1:
-            torch.save(net.module.state_dict(), 'checkpoints/%s/models/model.%d.t7' % (args.exp_name, epoch))
-        else:
-            torch.save(net.state_dict(), 'checkpoints/%s/models/model.%d.t7' % (args.exp_name, epoch))
+        # if torch.cuda.device_count() > 1:
+        #     torch.save(net.module.state_dict(), 'checkpoints/%s/models/model.%d.t7' % (args.exp_name, epoch))
+        # else:
+        #     torch.save(net.state_dict(), 'checkpoints/%s/models/model.%d.t7' % (args.exp_name, epoch))
         gc.collect()
 
 

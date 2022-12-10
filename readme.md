@@ -13,6 +13,25 @@ tqdm
 
 TensorboardX: https://github.com/lanpa/tensorboardX
 
+## Introduction
+
+## Code organization
+This repository is a fork of https://github.com/WangYueFt/dcp. The overall code organization can be
+summarized as follows: 
+- `main.py` - The main training code that is overloaded to also perform validation.
+- `model.py` - The model definition for DCP, further separated into the `encoder` and `head` definition.
+- `data.py` - The dataset definition, along with newly implemented augmentation procedure for the data.
+- Along with miscellaneous utility and visualization scripts for development 
+
+## Augmentation Procedure
+
+Augmentation procedures that simulates occlusions and subtractive noise are added in the `data.py` section
+of the code. Each augmentation procedures are implemented in a separate class as follows
+1. `RandomRemoveTwoQuadrant` - Divides the point cloud into two quadrants, remove a single portion from one quadrant.
+2. `RandomRemoveFourQuadrant` - Divides the point cloud into four quadrants, remove a single portion from one quadrant.
+3. `RandomRemoveEightQuadrant` - Divides the point cloud into eight quadrants, remove a single portion form one quadrant.
+4. `RandomRemove` - Removes the point with a uniform random probability across all points.
+
 ## Training
 
 ### DCP-v1

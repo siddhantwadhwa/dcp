@@ -173,7 +173,7 @@ class Augment:
     def __init__(
             self,
             transforms: Tuple[Any] = (
-                Jitter(),  # TODO: ALWAYS LEAVE THIS LINE UNCOMMENTED
+                # Jitter(),  # TODO: ALWAYS LEAVE THIS LINE UNCOMMENTED
                 RandomRemoveTwoQuadrant(),  # TODO: Sergi: Uncomment this line and comment out the rest, run python command
                 # RandomRemoveFourQuadrant(),  # TODO: Eric: Uncomment this line, and comment out the rest and run the python command.
                 # RandomRemoveEightQuadrant(),  # TODO: Siddhant: Uncomment this line and comment out the rest and run the python command.
